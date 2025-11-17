@@ -1,0 +1,86 @@
+---
+title: "Walmart Sales Forcasting"
+author: "Daniel Crofts"
+format: pdf
+editor: visual
+---
+
+## Libraries and Data
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+
+dat_train <- read.csv("train.csv")
+dat_test <- read.csv("test.csv")
+glimpse(dat_train)
+
+```
+
+## EDA
+
+### 1
+
+```{r}
+dat_train2 <- dat_train %>%
+  mutate(Date = as.Date(Date),
+         Week = isoweek(Date),
+         Year = year(Date))
+
+holiday_plot <- dat_train2 %>%
+  group_by(Date, IsHoliday) %>%
+  summarise(AvgSales = mean(Weekly_Sales), .groups = "drop")
+
+ggplot(holiday_plot, aes(x = Date, y = AvgSales, color = IsHoliday)) +
+  geom_line() +
+  labs(title = "Average Weekly Sales Over Time (Holidays vs Non-Holidays)")
+
+
+```
+
+One issue we need to consider as shown in this graph is that holday weeks are weighted five times more heavily in this competition so that needs to be addressed in the model.
+
+### 2
+
+```{r}
+store_var <- dat_train %>%
+  group_by(Store) %>%
+  summarise(AvgSales = mean(Weekly_Sales))
+
+
+ggplot(store_var, aes(x = Store, y = AvgSales)) +
+  geom_col() + labs(title = "Average Sales by Store")
+
+
+```
+
+This graph shows that there is significant variation in sales accross store locations. For our predictions to be accurate we will have to account for these differences at the store level.
+
+### 3
+
+```{r}
+dat_train <- dat_train %>%
+  mutate(
+    Date = as.Date(Date),
+    Year  = year(Date),
+    Month = month(Date),
+    Week  = isoweek(Date)
+  )
+
+trend <- dat_train %>%
+  group_by(Year, Month) %>%
+  summarise(AvgSales = mean(Weekly_Sales), .groups = "drop") %>%
+  mutate(TimeIndex = (Year - min(Year)) * 12 + Month)
+
+ggplot(trend, aes(x = TimeIndex, y = AvgSales)) +
+  geom_line() +
+  labs(title = "Monthly Average Walmart Sales Over Time",
+       x = "Time (months from start)",
+       y = "Average Weekly Sales")
+
+```
+
+This EDA shows that there is also significant variation in sales over time. We must consider time related patterns when predicting the data.
