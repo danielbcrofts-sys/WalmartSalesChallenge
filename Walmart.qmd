@@ -16,6 +16,7 @@ library(ggplot2)
 
 dat_train <- read.csv("train.csv")
 dat_test <- read.csv("test.csv")
+features <- read.csv
 glimpse(dat_train)
 
 ```
@@ -84,3 +85,49 @@ ggplot(trend, aes(x = TimeIndex, y = AvgSales)) +
 ```
 
 This EDA shows that there is also significant variation in sales over time. We must consider time related patterns when predicting the data.
+
+
+## Time Series Analysis
+
+```{r}
+
+train <- read_csv("train.csv")
+test  <- read_csv("test.csv")
+features <- read_csv("features.csv")
+stores <- read_csv("stores.csv")
+
+# 1
+
+
+train <- train %>% mutate(Date = as.Date(Date))
+test  <- test  %>% mutate(Date = as.Date(Date))
+features <- features %>% mutate(Date = as.Date(Date))
+
+
+
+features <- features %>%
+  mutate(across(starts_with("MarkDown"), ~replace_na(., 0)))
+
+
+features <- features %>%
+  mutate(
+    TotalMarkdown = MarkDown1 + MarkDown2 + MarkDown3 + MarkDown4 + MarkDown5,
+    MarkdownFlag = if_else(TotalMarkdown > 0, 1, 0)
+  )
+
+# 2
+
+train_full <- train %>%
+  left_join(features, by = c("Store", "Date")) %>%
+  left_join(stores,   by = "Store")
+
+test_full <- test %>%
+  left_join(features, by = c("Store", "Date")) %>%
+  left_join(stores,   by = "Store")
+
+
+glimpse(train_full)
+glimpse(test_full)
+
+
+```
