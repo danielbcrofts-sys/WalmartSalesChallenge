@@ -302,3 +302,120 @@ submission <- dat_test %>%
 write_csv(submission, "xgb_submission.csv")
 
 ```
+
+## Seasonal Naive (My best one)
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(forecast)
+library(vroom)
+
+dat_train <- vroom("train.csv")
+dat_test  <- vroom("test.csv")
+
+# Ensure dates are Date objects
+dat_train <- dat_train %>% mutate(Date = as.Date(Date))
+dat_test  <- dat_test %>% mutate(Date = as.Date(Date))
+
+# Forecast horizon (should be 39 weeks)
+h <- length(unique(dat_test$Date))
+
+
+
+# Build forecasts by Store × Dept
+
+
+all_forecasts <- list()
+pairs <- dat_train %>% distinct(Store, Dept)
+
+for (i in seq_len(nrow(pairs))) {
+  
+  store_i <- pairs$Store[i]
+  dept_i  <- pairs$Dept[i]
+  
+  message("Processing Store ", store_i, " Dept ", dept_i)
+  
+  df <- dat_train %>%
+    filter(Store == store_i, Dept == dept_i) %>%
+    arrange(Date)
+  
+  df_test <- dat_test %>%
+    filter(Store == store_i, Dept == dept_i) %>%
+    arrange(Date)
+  
+  # If there is no test data for this combo, skip it
+  if (nrow(df_test) == 0) next
+  
+  # --- clean training series ---------------------------------
+  y_raw <- df$Weekly_Sales
+  
+  # Drop rows where Weekly_Sales is NA
+  good_idx <- !is.na(y_raw)
+  y_raw <- y_raw[good_idx]
+  
+  # If < 2 good observations, just use overall mean from this dept/store
+  if (length(y_raw) < 2) {
+    fc <- rep(mean(df$Weekly_Sales, na.rm = TRUE), nrow(df_test))
+    
+  } else {
+    # Replace any remaining NA (shouldn't be any after filter, but just in case)
+    if (anyNA(y_raw)) {
+      y_raw[is.na(y_raw)] <- mean(y_raw, na.rm = TRUE)
+    }
+    
+    # Make weekly ts (frequency = 52)
+    y <- ts(y_raw, frequency = 52)
+    h <- nrow(df_test)
+    
+    # Model 1: seasonal naive
+    
+    fc_snaive <- tryCatch({
+      fit_snaive <- snaive(y, h = h)
+      as.numeric(fit_snaive$mean)
+    }, error = function(e) {
+      # fallback: simple mean if snaive fails
+      rep(mean(y_raw), h)
+    })
+    
+    # Model 2: stlf(ETS)
+    
+    fc_stlf <- tryCatch({
+      fit_stlf <- stlf(y, h = h, method = "ets")
+      as.numeric(fit_stlf$mean)
+    }, error = function(e) {
+      NULL  # if it fails, we'll ignore it
+    })
+    
+    # Ensemble
+
+    if (!is.null(fc_stlf)) {
+      fc <- (fc_snaive + fc_stlf) / 2
+    } else {
+      fc <- fc_snaive
+    }
+  }
+  
+  all_forecasts[[i]] <- tibble(
+    Store = store_i,
+    Dept = dept_i,
+    Date = df_test$Date,
+    Weekly_Sales = as.numeric(fc)
+  )
+}
+
+forecast_df <- bind_rows(all_forecasts)
+
+
+
+# final submission file
+
+submission <- submission %>%
+  mutate(Id = paste(Store, Dept, Date, sep = "_")) %>%
+  select(Id, Weekly_Sales)
+
+
+vroom_write(submission, "seasonal_naive_submission.csv", delim = ',')
+
+
+```
