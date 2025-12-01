@@ -12,11 +12,12 @@ library(tidyverse)
 library(dplyr)
 library(lubridate)
 library(ggplot2)
+library(discrim)
+library(naivebayes)
 
-
-dat_train <- read.csv("train.csv")
-dat_test <- read.csv("test.csv")
-features <- read.csv
+dat_train <- read_csv("train.csv")
+dat_test <- read_csv("test.csv")
+features <- read_csv
 glimpse(dat_train)
 
 ```
@@ -86,7 +87,6 @@ ggplot(trend, aes(x = TimeIndex, y = AvgSales)) +
 
 This EDA shows that there is also significant variation in sales over time. We must consider time related patterns when predicting the data.
 
-
 ## Time Series Analysis
 
 ```{r}
@@ -129,5 +129,176 @@ test_full <- test %>%
 glimpse(train_full)
 glimpse(test_full)
 
+
+```
+
+## Naive Bayes
+
+```{r}
+dat_train <- read_csv("train.csv")
+dat_test <- read_csv("test.csv")
+cutoffs <- quantile(dat_train$Weekly_Sales, probs = seq(0, 1, by = 0.10))
+
+# Create binned target and remove Weekly_Sales from predictors
+train_model <- dat_train %>%
+  mutate(
+    SalesBin = cut(
+      Weekly_Sales,
+      breaks = cutoffs,
+      include.lowest = TRUE,
+      labels = FALSE
+    ),
+    SalesBin = factor(SalesBin)
+  ) %>%
+  dplyr::select(-Weekly_Sales)  # REMOVE the numeric target before recipe
+
+# Test dataset already matches predictor columns
+test_model <- dat_test
+
+# ---------------------------------------------------------
+# 2. RECIPE (NO Weekly_Sales anywhere)
+# ---------------------------------------------------------
+
+nb_recipe <- recipe(SalesBin ~ ., data = train_model) %>%
+  update_role(Store, Dept, Date, new_role = "ID") %>%   # IDs, not predictors
+  step_dummy(all_nominal_predictors()) %>%              # dummy-coding
+  step_zv(all_predictors())                             # drop zero-var columns
+
+# ---------------------------------------------------------
+# 3. NAIVE BAYES MODEL SPEC
+# ---------------------------------------------------------
+
+nb_spec <- naive_Bayes() %>%
+  set_engine("naivebayes") %>%
+  set_mode("classification")
+
+# ---------------------------------------------------------
+# 4. WORKFLOW
+# ---------------------------------------------------------
+
+nb_wf <- workflow() %>%
+  add_recipe(nb_recipe) %>%
+  add_model(nb_spec)
+
+# ---------------------------------------------------------
+# 5. FIT THE MODEL
+# ---------------------------------------------------------
+
+nb_fit <- nb_wf %>% fit(data = train_model)
+
+# ---------------------------------------------------------
+# 6. PREDICT BINS FOR TEST DATA
+# ---------------------------------------------------------
+
+test_bins <- predict(nb_fit, test_model)
+
+test_pred <- bind_cols(test_model, test_bins)
+
+# ---------------------------------------------------------
+# 7. CONVERT BIN PREDICTIONS BACK TO NUMERIC SALES
+# ---------------------------------------------------------
+
+bin_midpoints <- sapply(1:(length(cutoffs)-1), function(i) {
+  mean(c(cutoffs[i], cutoffs[i+1]))
+})
+
+test_pred <- test_pred %>%
+  mutate(
+    Weekly_Sales = bin_midpoints[as.numeric(.pred_class)]
+  )
+
+# ---------------------------------------------------------
+# 8. CREATE KAGGLE SUBMISSION FILE
+# ---------------------------------------------------------
+
+submission <- test_pred %>%
+  mutate(Id = paste(Store, Dept, Date, sep = "_")) %>%
+  dplyr::select(Id, Weekly_Sales)
+
+write_csv(submission, "naive_bayes_submission.csv")
+```
+
+## Boosted Tree
+
+```{r}
+library(tidymodels)
+library(xgboost)
+library(finetune)
+library(doParallel)
+
+
+dat_train <- read_csv("train.csv")
+dat_test <- read_csv("test.csv")
+
+dat_train <- dat_train %>%
+  mutate(
+    Store = as.integer(Store),
+    Dept  = as.integer(Dept),
+    IsHoliday = as.integer(IsHoliday)
+  )
+
+dat_test <- dat_test %>%
+  mutate(
+    Store = as.integer(Store),
+    Dept  = as.integer(Dept),
+    IsHoliday = as.integer(IsHoliday)
+  )
+
+
+boost_recipe <- recipe(Weekly_Sales ~ ., data = dat_train) %>%
+  step_date(Date, features = c("year", "month", "week", "decimal")) %>%
+  step_rm(Date) %>%                 
+  step_normalize(all_numeric_predictors())  
+
+prep_rec <- prep(boost_recipe)
+
+train_prepped <- bake(prep_rec, new_data = dat_train)
+test_prepped  <- bake(prep_rec, new_data = dat_test)
+
+
+X_train <- train_prepped %>%
+  select(-Weekly_Sales) %>%
+  mutate(across(everything(), as.numeric)) %>%
+  as.matrix()
+
+y_train <- train_prepped$Weekly_Sales
+
+X_test <- test_prepped %>%
+  mutate(across(everything(), as.numeric)) %>%
+  as.matrix()
+
+
+params <- list(
+  objective = "reg:squarederror",
+  eta = 0.05,   
+  max_depth = 8,
+  min_child_weight = 5,    
+  subsample = 0.9,
+  colsample_bytree = 0.8,
+  nthread = 4
+)
+
+model <- xgboost(
+  data = X_train,
+  label = y_train,
+  params = params,
+  nrounds = 1500, 
+  verbose = 1
+)
+
+
+
+preds <- predict(model, X_test)
+
+
+
+submission <- dat_test %>%
+  mutate(
+    Id = paste(Store, Dept, Date, sep = "_"),
+    Weekly_Sales = preds
+  ) %>%
+  select(Id, Weekly_Sales)
+
+write_csv(submission, "xgb_submission.csv")
 
 ```
